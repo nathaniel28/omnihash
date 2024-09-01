@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"net/http"
 	"strings"
 	"time"
@@ -386,7 +387,18 @@ func main() {
 
 	var client http.Client
 
+	intr := make(chan os.Signal, 1)
+	signal.Notify(intr, os.Interrupt)
+
 	for tasks.Len() > 0 {
+		select {
+		case <-intr:
+			log.Println("interrupted; shut down safely")
+			return
+		default:
+			break
+		}
+
 		job := tasks.Next()
 
 		co, err := NewCollectionSubset(&client, job.collection, batchSize, job.page)
