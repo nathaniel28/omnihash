@@ -100,17 +100,71 @@ func NewItemMetadata(client *http.Client, item string) (*ItemMetadata, error) {
 	return &im, nil
 }
 
-func createEntry(db *sql.DB, insName *sql.Stmt, insHash *sql.Stmt, im *ItemMetadata, item string) (err error) {
+type Storage struct {
+	db      *sql.DB
+	insName *sql.Stmt
+	insHash *sql.Stmt
+}
+
+func NewStorage(dbPath string) (*Storage, error) {
+	var s Storage
+	var err error
+
+	s.db, err = sql.Open("sqlite3", "hashes.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = s.db.Exec(`CREATE TABLE IF NOT EXISTS archive_items (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name VARCHAR(255) UNIQUE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hashes (
+hash BINARY(20) PRIMARY KEY,
+item INTEGER,
+FOREIGN KEY (item) REFERENCES archive_item(id)
+);`)
+	if err != nil {
+		return nil, err
+	}
+
+	s.insName, err = s.db.Prepare(`INSERT INTO archive_items (name) VALUES (?);`)
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	s.insHash, err = s.db.Prepare(`INSERT INTO hashes (hash, item) VALUES (?, ?);`)
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+
+	return &s, nil
+}
+
+func (s *Storage) Close() {
+	if s.insHash != nil {
+		s.insHash.Close()
+	}
+	if s.insName != nil {
+		s.insName.Close()
+	}
+	if s.db != nil {
+		s.db.Close()
+	}
+}
+
+func (s *Storage) NewEntry(im *ItemMetadata, item string) (err error) {
 	if len(im.Files) == 0 {
 		return fmt.Errorf("no files")
 	}
 
-	tx, err := db.Begin()
+	tx, err := s.db.Begin()
 	if err != nil {
 		return
 	}
 
-	res, err := insName.Exec(item)
+	res, err := s.insName.Exec(item)
 	if err != nil {
 		tx.Rollback()
 		return
@@ -144,7 +198,7 @@ func createEntry(db *sql.DB, insName *sql.Stmt, insHash *sql.Stmt, im *ItemMetad
 			err = nil
 			continue
 		}
-		res, err = insHash.Exec(hexed, id)
+		res, err = s.insHash.Exec(hexed, id)
 		if err != nil {
 			log.Printf("item %s: file %s: %v\n", item, f.Name, err)
 			err = nil
@@ -272,7 +326,7 @@ func (t *Tasks) Close() {
 	}
 }
 
-const batchSize = 1000
+const batchSize = 1
 
 func main() {
 	if len(os.Args) != 2 {
@@ -280,37 +334,11 @@ func main() {
 		return
 	}
 
-	db, err := sql.Open("sqlite3", "hashes.db")
+	storage, err := NewStorage("hashes.db")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
-
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS archive_items (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-name VARCHAR(255) UNIQUE NOT NULL
-);
-CREATE TABLE IF NOT EXISTS hashes (
-hash BINARY(20) PRIMARY KEY,
-item INTEGER,
-FOREIGN KEY (item) REFERENCES archive_item(id)
-);`)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	insName, err := db.Prepare(`INSERT INTO archive_items (name) VALUES (?);`)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer insName.Close()
-	insHash, err := db.Prepare(`INSERT INTO hashes (hash, item) VALUES (?, ?);`)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer insHash.Close()
-
-	var client http.Client
+	defer storage.Close()
 
 	tasks, err := NewTasks("working.db")
 	if err != nil {
@@ -318,6 +346,8 @@ FOREIGN KEY (item) REFERENCES archive_item(id)
 	}
 	defer tasks.Close()
 	tasks.Add(os.Args[1])
+
+	var client http.Client
 
 	for tasks.Len() > 0 {
 		job := tasks.Next()
@@ -349,7 +379,7 @@ FOREIGN KEY (item) REFERENCES archive_item(id)
 				tasks.Add(itm.Name)
 				continue
 			}
-			err = createEntry(db, insName, insHash, im, itm.Name)
+			err = storage.NewEntry(im, itm.Name)
 			if err != nil {
 				log.Printf("in item %s: %v\n", itm.Name, err)
 			}
