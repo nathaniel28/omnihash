@@ -234,6 +234,8 @@ type Tasks struct {
 }
 
 func NewTasks(dbPath string) (*Tasks, error) {
+	// yes, this code is ugly. no, I don't know a better way
+
 	var t Tasks
 	var err error
 
@@ -252,6 +254,12 @@ name VARCHAR(255) PRIMARY KEY,
 page INTEGER,
 reason TEXT
 )`)
+	if err != nil {
+		t.Close()
+		return nil, err
+	}
+
+	err = t.db.QueryRow(`SELECT COUNT(*) FROM jobs;`).Scan(&t.length)
 	if err != nil {
 		t.Close()
 		return nil, err
