@@ -361,11 +361,6 @@ func (t *Tasks) Close() {
 const batchSize = 1000
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("requires a starting collection")
-		return
-	}
-
 	storage, err := NewStorage("hashes.db")
 	if err != nil {
 		log.Fatal(err)
@@ -377,7 +372,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer tasks.Close()
-	tasks.Add(os.Args[1])
+	for i := 1; i < len(os.Args); i++ {
+		tasks.Add(os.Args[i])
+	}
 
 	var client http.Client
 
