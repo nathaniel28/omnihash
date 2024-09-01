@@ -228,6 +228,8 @@ type Tasks struct {
 	increment *sql.Stmt
 	add       *sql.Stmt
 	remove    *sql.Stmt
+	remember  *sql.Stmt
+	hasDone   *sql.Stmt
 	length    int
 }
 
@@ -244,7 +246,12 @@ func NewTasks(dbPath string) (*Tasks, error) {
 name VARCHAR(255) PRIMARY KEY,
 page INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_page ON jobs(page);`)
+CREATE INDEX IF NOT EXISTS idx_page ON jobs(page);
+CREATE TABLE IF NOT EXISTS done (
+name VARCHAR(255) PRIMARY KEY,
+page INTEGER,
+reason TEXT
+)`)
 	if err != nil {
 		t.Close()
 		return nil, err
@@ -266,6 +273,16 @@ CREATE INDEX IF NOT EXISTS idx_page ON jobs(page);`)
 		return nil, err
 	}
 	t.remove, err = t.db.Prepare(`DELETE FROM jobs WHERE name = (?);`)
+	if err != nil {
+		t.Close()
+		return nil, err
+	}
+	t.remember, err = t.db.Prepare(`INSERT INTO done (name, page, reason) VALUES (?, ?, ?);`)
+	if err != nil {
+		t.Close()
+		return nil, err
+	}
+	t.hasDone, err = t.db.Prepare(`SELECT 1 FROM done WHERE name = (?);`)
 	if err != nil {
 		t.Close()
 		return nil, err
@@ -293,17 +310,26 @@ func (t *Tasks) Increment(name string) {
 }
 
 func (t *Tasks) Add(name string) {
-	_, err := t.add.Exec(name, int(1))
+	var done int
+	err := t.hasDone.QueryRow().Scan(&done)
+	if err == nil && done == 1 {
+		return
+	}
+	_, err = t.add.Exec(name, int(1))
 	if err != nil {
 		log.Fatal(err)
 	}
 	t.length++
 }
 
-func (t *Tasks) Remove(name string) {
-	_, err := t.remove.Exec(name)
+func (t *Tasks) Remove(job *Job, reason string) {
+	_, err := t.remove.Exec(job.collection)
 	if err != nil {
 		log.Fatal(err)
+	}
+	_, err = t.remember.Exec(job.collection, job.page, reason)
+	if err != nil {
+		log.Printf("failed to remember deletion of %v %v by reason %v: %v\n", job.collection, job.page, reason, err)
 	}
 	t.length--
 }
@@ -320,6 +346,12 @@ func (t *Tasks) Close() {
 	}
 	if t.remove != nil {
 		t.remove.Close()
+	}
+	if t.remember != nil {
+		t.remember.Close()
+	}
+	if t.hasDone != nil {
+		t.hasDone.Close()
 	}
 	if t.db != nil {
 		t.db.Close()
@@ -357,7 +389,7 @@ func main() {
 			job.page++
 			co, err = NewCollectionSubset(&client, job.collection, batchSize, job.page)
 			if err != nil {
-				tasks.Remove(job.collection)
+				tasks.Remove(job, fmt.Sprint(err))
 				log.Printf("removed %v due to error %v\n", job.collection, err)
 				continue
 			}
@@ -365,7 +397,7 @@ func main() {
 		}
 
 		if len(co.Resp.Buf) == 0 /*|| job.page > foo*/ {
-			tasks.Remove(job.collection)
+			tasks.Remove(job, "")
 			continue
 		}
 		for _, itm := range co.Resp.Buf {
