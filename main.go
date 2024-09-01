@@ -326,7 +326,7 @@ func (t *Tasks) Close() {
 	}
 }
 
-const batchSize = 1
+const batchSize = 1000
 
 func main() {
 	if len(os.Args) != 2 {
