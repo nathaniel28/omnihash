@@ -123,7 +123,7 @@ name VARCHAR(255) UNIQUE NOT NULL
 CREATE TABLE IF NOT EXISTS hashes (
 hash BINARY(20) PRIMARY KEY,
 item INTEGER,
-FOREIGN KEY (item) REFERENCES archive_item(id)
+FOREIGN KEY (item) REFERENCES archive_items(id)
 );`)
 	if err != nil {
 		return nil, err
